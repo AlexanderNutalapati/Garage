@@ -5,26 +5,58 @@ import numpy as np
 import torch
 from PIL import Image
 import json
+import os
 
-def generate_object():
-    with open('/home/jovyan/afilatov/research_for_gen_aug/Garage/objects.json', 'r') as file:
-        objects = json.load(file)
-    object = list(objects.keys())[0] #TODO: Implement prompts for objects, search for better prompts for flux
+import torch
+from diffusers import FluxPipeline
 
-    generated_object_image = flux(name = "flux-dev",
-        prompt=object,
-        device= "cuda" if torch.cuda.is_available() else "cpu",
-        output_dir = "/home/jovyan/afilatov/research_for_gen_aug/Garage",)
+batch_size = 5
 
-    generated_object_image.save("/home/jovyan/afilatov/research_for_gen_aug/Garage/object_raw_image.jpg")
-    generated_object_image = np.array(generated_object_image)
+with open('/home/jovyan/afilatov/research_for_gen_aug/Garage/objects.json', 'r') as file:
+    objects = json.load(file)
 
-    depth = depth_anything_v2(generated_object_image,
-            input_size=518,
-            encoder='vitl')
+#object = objects[list(objects.keys())[0]][0] #TODO: Implement prompts for objects, search for better prompts for flux
+objects_keys = objects.keys()
+root_path = "/home/jovyan/afilatov/research_for_gen_aug/generated_objects"
 
-    depth = Image.fromarray(depth)
-    depth.save('/home/jovyan/afilatov/research_for_gen_aug/Garage/object_depth.jpg')
+device = "cuda"
+pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=torch.bfloat16)
+pipe = pipe.to(device)
 
-generate_object()
+for object_key in objects_keys:
+    object_path = root_path + '/' + object_key
+    images_path = object_path + '/images'
+    os.mkdir(object_path)
+    os.mkdir(images_path)
+
+    object = objects[object_key]
+    outputs = []
+    for batch in range(0,len(object),batch_size):
+        if batch + batch_size < len(objects[object_key]):
+            prompts = object[batch:batch+5]
+        else:
+            prompts = object[batch:-1]
+        out = pipe(
+                prompt=prompts,
+                guidance_scale=3.5,
+                height=768,
+                width=1360,
+                num_inference_steps=50,
+            ).images
+        outputs += out
+    
+    for i in range(len(outputs)):
+        prompted_image_path = images_path + f"/prompt{i:05}"
+        
+        
+        
+            
+    
+    
+    for i,prompt in enumerate(objects[object_key]):
+        print(prompt)
+        image_dir = generate_object(prompt, images_path, i)
+        prompts[prompt] = image_dir
+    with open(f'{object_path}/prompts.json', 'w') as f:
+        json.dump(prompts, f)
 
