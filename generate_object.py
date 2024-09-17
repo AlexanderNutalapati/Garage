@@ -10,14 +10,16 @@ from transformers import pipeline
 import torch
 from diffusers import FluxPipeline
 import gc
-from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+from torchvision import transforms
+from transformers import AutoModelForImageSegmentation
+
 
 
 
 
 batch_size = 5
 
-with open('/home/jovyan/afilatov/research_for_gen_aug/Garage/objects.json', 'r') as file:
+with open('/home/jovyan/afilatov/research_for_gen_aug/Garage/objects_prompts.json', 'r') as file:
     objects = json.load(file)
 
 #object = objects[list(objects.keys())[0]][0] #TODO: Implement prompts for objects, search for better prompts for flux
@@ -25,6 +27,26 @@ objects_keys = objects.keys()
 root_path = "/home/jovyan/afilatov/research_for_gen_aug/generated_objects"
 
 
+def extract_object(birefnet, imagepath):
+        # Data settings
+        image_size = (1024, 1024)
+        transform_image = transforms.Compose([
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        image = Image.open(imagepath)
+        input_images = transform_image(image).unsqueeze(0).to('cuda')
+
+        # Prediction
+        with torch.no_grad():
+            preds = birefnet(input_images)[-1].sigmoid().cpu()
+        pred = preds[0].squeeze()
+        pred_pil = transforms.ToPILImage()(pred)
+        mask = pred_pil.resize(image.size)
+        image.putalpha(mask)
+        return image, mask
 
 
 
@@ -54,7 +76,7 @@ for object_key in objects_keys:
                 num_inference_steps=50,
             ).images
         outputs += out
-        # if batch > 10:
+        # if batch+batch_size > 2:
         #     break                                                                        #NOTE: REMOVE THIS BREAK!
     
     prompts = {}
@@ -92,8 +114,8 @@ for object_key in objects_keys:
             images_batch = images[batch:-1]
         out = depth_estimator(images_batch)
         outputs += out
-        # if batch > 10:
-        #     break                                                               #NOTE: REMOVE THIS BREAK!
+        # if batch+batch_size > 2:
+        #     break                                                                  #NOTE: REMOVE THIS BREAK!
     print(outputs[0].keys())
 
     for i in range(len(outputs)):
@@ -103,41 +125,24 @@ for object_key in objects_keys:
     del depth_estimator
     gc.collect()
     torch.cuda.empty_cache()
-
-    processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-    segmenter = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
-    segmenter = segmenter.to(device)
-    batch_prompts = [object_key] * batch_size
-    outputs = []
-    for batch in range(0,len(images),batch_size):
-        if batch + batch_size < len(objects[object_key]):
-            images_batch = images[batch:batch+5]
-        else:
-            images_batch = images[batch:-1]
-        inputs = processor(text=batch_prompts, images=images_batch, padding="max_length", return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            out = segmenter(**inputs)
-        
-        preds = out.logits.sigmoid().cpu().numpy()
-        outputs += list(preds)
-        # if batch > 10:
-        #     break                                                               #NOTE: REMOVE THIS BREAK!
-    #print(outputs[1].shape)
-
-    threshold = 0.45
-    for i in range(len(outputs)):
-        mask = (outputs[i] > threshold).astype(np.uint8) * 255
-        mask = Image.fromarray(mask).resize((1360,768), Image.BILINEAR)
-        prompted_image_path = images_path + f"/prompt{i:05}"
-        mask.save(f"{prompted_image_path}/mask.jpg")
     
 
-    del segmenter
+    birefnet = AutoModelForImageSegmentation.from_pretrained('ZhengPeng7/BiRefNet', trust_remote_code=True)
+    torch.set_float32_matmul_precision(['high', 'highest'][0])
+    birefnet.to('cuda')
+    birefnet.eval()
+    batch_prompts = [object_key] * batch_size
+    outputs = []
+    print(ls)
+    for i, prompt in enumerate(ls):
+        prompted_image_path = images_path + f"/prompt{i:05}"
+        _, mask = extract_object(birefnet, imagepath=f'{prompted_image_path}/object_raw_image.jpg')
+        mask.save(f"{prompted_image_path}/mask.jpg")
+     
+
+    del birefnet
     gc.collect()
     torch.cuda.empty_cache()
-
 
 
 
